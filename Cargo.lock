@@ -640,11 +640,9 @@ checksum = "b05b61dc5112cbb17e4b6cd61790d9845d13888356391624cbe7e41efeac1e75"
 name = "component2json"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "serde",
  "serde_json",
  "thiserror 2.0.17",
- "tokio",
  "wasmparser 0.239.0",
  "wasmtime",
  "wat",
@@ -4958,6 +4956,7 @@ dependencies = [
  "built",
  "bytes",
  "clap",
+ "component2json",
  "etcetera",
  "figment",
  "futures-util",
@@ -4988,6 +4987,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "tracing-test",
+ "wasmtime",
  "wassette",
 ]
 
