@@ -6,6 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Comprehensive test coverage for component2json crate with example components added to testdata directory (fetch-rs, brave-search-rs, context7-rs under 1MB) to validate JSON schema generation across different language ecosystems
 - Added `wassette inspect` subcommand for debugging WebAssembly components, displaying their JSON schema for inputs and outputs. This provides a convenient way to inspect component metadata without loading them into the MCP server
 - Added `just install` command for convenient local installation to ~/.local/bin
 - Configurable bind address for HTTP-based transports (SSE and StreamableHttp) via CLI flag `--bind-address`, environment variable `WASSETTE_BIND_ADDRESS`, or configuration file field `bind_address`. Default remains `127.0.0.1:9001` for backward compatibility
