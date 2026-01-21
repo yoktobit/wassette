@@ -350,6 +350,18 @@ When making documentation changes that affect visual presentation:
 
 Most contributions require you to agree to a Contributor License Agreement (CLA). When you submit a pull request, a CLA-bot will determine if you need to provide a CLA. See [CONTRIBUTING.md](./CONTRIBUTING.md) for details.
 
+### Pull Request Description Guidelines
+
+**Keep PR descriptions concise and focused:**
+- Describe your changes in **at most 3 sentences**
+- Focus on the what and why, not implementation details
+- If the PR breaks public-facing APIs, use one or two sentences to describe what is broken and how users should adapt
+
+**Example of a good PR description:**
+```
+This PR adds instrumentation to the MCP server runtime. It enables performance monitoring and debugging of tool execution. The changes are backward compatible with existing configurations.
+```
+
 ### Code of Conduct
 
 This project has adopted the [Microsoft Open Source Code of Conduct](https://opensource.microsoft.com/codeofconduct/). For more information, see the [Code of Conduct FAQ](https://opensource.microsoft.com/codeofconduct/faq/) or contact [opencode@microsoft.com](mailto:opencode@microsoft.com).
