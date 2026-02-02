@@ -204,9 +204,10 @@ pub async fn handle_tools_call(
             let contents = vec![Content::text(error_text)];
 
             let error_result = CallToolResult {
-                content: Some(contents),
+                content: contents,
                 structured_content: None,
                 is_error: Some(true),
+                meta: None,
             };
             Ok(serde_json::to_value(error_result)?)
         }
@@ -233,6 +234,9 @@ fn get_builtin_tools() -> Vec<Tool> {
             ),
             output_schema: None,
             annotations: None,
+            title: None,
+            icons: None,
+            meta: None,
         },
         Tool {
             name: Cow::Borrowed("unload-component"),
@@ -251,6 +255,9 @@ fn get_builtin_tools() -> Vec<Tool> {
             ),
             output_schema: None,
             annotations: None,
+            title: None,
+            icons: None,
+            meta: None,
         },
         Tool {
             name: Cow::Borrowed("list-components"),
@@ -267,6 +274,9 @@ fn get_builtin_tools() -> Vec<Tool> {
             ),
             output_schema: None,
             annotations: None,
+            title: None,
+            icons: None,
+            meta: None,
         },
         Tool {
             name: Cow::Borrowed("get-policy"),
@@ -288,6 +298,9 @@ fn get_builtin_tools() -> Vec<Tool> {
             ),
             output_schema: None,
             annotations: None,
+            title: None,
+            icons: None,
+            meta: None,
         },
         Tool {
             name: Cow::Borrowed("grant-storage-permission"),
@@ -328,6 +341,9 @@ fn get_builtin_tools() -> Vec<Tool> {
             ),
             output_schema: None,
             annotations: None,
+            title: None,
+            icons: None,
+            meta: None,
         },
         Tool {
             name: Cow::Borrowed("grant-network-permission"),
@@ -360,6 +376,9 @@ fn get_builtin_tools() -> Vec<Tool> {
             ),
             output_schema: None,
             annotations: None,
+            title: None,
+            icons: None,
+            meta: None,
         },
         Tool {
             name: Cow::Borrowed("grant-environment-variable-permission"),
@@ -392,6 +411,9 @@ fn get_builtin_tools() -> Vec<Tool> {
             ),
             output_schema: None,
             annotations: None,
+            title: None,
+            icons: None,
+            meta: None,
         },
         Tool {
             name: Cow::Borrowed("revoke-storage-permission"),
@@ -424,6 +446,9 @@ fn get_builtin_tools() -> Vec<Tool> {
             ),
             output_schema: None,
             annotations: None,
+            title: None,
+            icons: None,
+            meta: None,
         },
         Tool {
             name: Cow::Borrowed("revoke-network-permission"),
@@ -456,6 +481,9 @@ fn get_builtin_tools() -> Vec<Tool> {
             ),
             output_schema: None,
             annotations: None,
+            title: None,
+            icons: None,
+            meta: None,
         },
         Tool {
             name: Cow::Borrowed("revoke-environment-variable-permission"),
@@ -488,6 +516,9 @@ fn get_builtin_tools() -> Vec<Tool> {
             ),
             output_schema: None,
             annotations: None,
+            title: None,
+            icons: None,
+            meta: None,
         },
         Tool {
             name: Cow::Borrowed("reset-permission"),
@@ -509,6 +540,9 @@ fn get_builtin_tools() -> Vec<Tool> {
             ),
             output_schema: None,
             annotations: None,
+            title: None,
+            icons: None,
+            meta: None,
         },
         Tool {
             name: Cow::Borrowed("search-components"),
@@ -530,6 +564,9 @@ fn get_builtin_tools() -> Vec<Tool> {
             ),
             output_schema: None,
             annotations: None,
+            title: None,
+            icons: None,
+            meta: None,
         },
     ]
 }
@@ -630,9 +667,10 @@ pub(crate) async fn handle_search_component(
     let contents = vec![Content::text(status_text)];
 
     Ok(CallToolResult {
-        content: Some(contents),
+        content: contents,
         structured_content: None,
         is_error: None,
+        meta: None,
     })
 }
 
@@ -680,9 +718,10 @@ pub async fn handle_get_policy(
     let contents = vec![Content::text(status_text)];
 
     Ok(CallToolResult {
-        content: Some(contents),
+        content: contents,
         structured_content: None,
         is_error: None,
+        meta: None,
     })
 }
 
@@ -731,9 +770,10 @@ async fn handle_grant_permission_generic(
             let contents = vec![Content::text(status_text)];
 
             Ok(CallToolResult {
-                content: Some(contents),
+                content: contents,
                 structured_content: None,
                 is_error: None,
+                meta: None,
             })
         }
         Err(e) => {
@@ -833,9 +873,10 @@ async fn handle_revoke_permission_generic(
             let contents = vec![Content::text(status_text)];
 
             Ok(CallToolResult {
-                content: Some(contents),
+                content: contents,
                 structured_content: None,
                 is_error: None,
+                meta: None,
             })
         }
         Err(e) => {
@@ -900,9 +941,10 @@ pub async fn handle_revoke_storage_permission(
             let contents = vec![Content::text(status_text)];
 
             Ok(CallToolResult {
-                content: Some(contents),
+                content: contents,
                 structured_content: None,
                 is_error: None,
+                meta: None,
             })
         }
         Err(e) => {
@@ -969,9 +1011,10 @@ pub async fn handle_reset_permission(
             let contents = vec![Content::text(status_text)];
 
             Ok(CallToolResult {
-                content: Some(contents),
+                content: contents,
                 structured_content: None,
                 is_error: None,
+                meta: None,
             })
         }
         Err(e) => {
@@ -1390,12 +1433,7 @@ mod tests {
         let result = handle_search_component(&req, &lifecycle_manager).await?;
 
         // Parse the result
-        let content = result
-            .content
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("No content in result"))?;
-
-        let content_json = serde_json::to_value(content)?;
+        let content_json = serde_json::to_value(&result.content)?;
         let text = content_json[0]["text"]
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("No text in content"))?;
@@ -1407,8 +1445,8 @@ mod tests {
             .as_array()
             .ok_or_else(|| anyhow::anyhow!("Components is not an array"))?;
 
-        // Should return all 9 components from component-registry.json
-        assert_eq!(components.len(), 9);
+        // Should return all 12 components from component-registry.json
+        assert_eq!(components.len(), 12);
 
         Ok(())
     }
@@ -1429,12 +1467,7 @@ mod tests {
         let result = handle_search_component(&req, &lifecycle_manager).await?;
 
         // Parse the result
-        let content = result
-            .content
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("No content in result"))?;
-
-        let content_json = serde_json::to_value(content)?;
+        let content_json = serde_json::to_value(&result.content)?;
         let text = content_json[0]["text"]
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("No text in content"))?;
@@ -1485,12 +1518,7 @@ mod tests {
 
         let result = handle_search_component(&req, &lifecycle_manager).await?;
 
-        let content = result
-            .content
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("No content in result"))?;
-
-        let content_json = serde_json::to_value(content)?;
+        let content_json = serde_json::to_value(&result.content)?;
         let text = content_json[0]["text"]
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("No text in content"))?;
@@ -1521,12 +1549,7 @@ mod tests {
 
         let result = handle_search_component(&req, &lifecycle_manager).await?;
 
-        let content = result
-            .content
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("No content in result"))?;
-
-        let content_json = serde_json::to_value(content)?;
+        let content_json = serde_json::to_value(&result.content)?;
         let text = content_json[0]["text"]
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("No text in content"))?;
@@ -1557,12 +1580,7 @@ mod tests {
 
         let result = handle_search_component(&req, &lifecycle_manager).await?;
 
-        let content = result
-            .content
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("No content in result"))?;
-
-        let content_json = serde_json::to_value(content)?;
+        let content_json = serde_json::to_value(&result.content)?;
         let text = content_json[0]["text"]
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("No text in content"))?;
@@ -1573,8 +1591,9 @@ mod tests {
             .ok_or_else(|| anyhow::anyhow!("Components is not an array"))?;
 
         // Should match components with either "weather" or "rust"
-        // Weather Server (2), Fetch (Rust), Filesystem (Rust), Brave Search (Rust), Context7 (Rust)
-        assert_eq!(components.len(), 6);
+        // Weather Server, Open-Meteo Weather, arXiv Research (Rust), Fetch (Rust),
+        // Filesystem (Rust), Brave Search (Rust), Context7 (Rust)
+        assert_eq!(components.len(), 7);
 
         Ok(())
     }
@@ -1596,12 +1615,7 @@ mod tests {
 
         let result = handle_search_component(&req, &lifecycle_manager).await?;
 
-        let content = result
-            .content
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("No content in result"))?;
-
-        let content_json = serde_json::to_value(content)?;
+        let content_json = serde_json::to_value(&result.content)?;
         let text = content_json[0]["text"]
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("No text in content"))?;
@@ -1646,7 +1660,7 @@ mod tests {
         let content1_json = serde_json::to_value(&result1.content)?;
         let text1 = content1_json[0]["text"].as_str().unwrap();
         let response1: Value = serde_json::from_str(text1)?;
-        assert_eq!(response1["components"].as_array().unwrap().len(), 9);
+        assert_eq!(response1["components"].as_array().unwrap().len(), 12);
 
         // Test 2: Query with single term
         let mut args2 = serde_json::Map::new();
