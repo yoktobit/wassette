@@ -4,6 +4,48 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- Split local and remote commands in the binary, improving CLI organization with dedicated subcommands for local operations vs remote server management ([#534](https://github.com/microsoft/wassette/pull/534))
+- Twelve-factor app compliance with `PORT` and `BIND_HOST` environment variables for configuring server binding, plus `/health` and `/ready` endpoints for container orchestration and load balancer health checks ([#532](https://github.com/microsoft/wassette/pull/532))
+- Shell completion generation via `wassette autocomplete` subcommand supporting bash, zsh, fish, and PowerShell ([#558](https://github.com/microsoft/wassette/pull/558))
+- `wassette registry` CLI subcommands for searching and fetching components from the centralized component registry: `wassette registry search [query]` to search by name, description, or URI, and `wassette registry get <component>` to fetch and load components directly ([#481](https://github.com/microsoft/wassette/pull/481))
+- CLI subcommand for tool CRUD operations and invocation, allowing direct tool management from the command line ([#512](https://github.com/microsoft/wassette/pull/512))
+- Provisioning manifest support with component provisioning logic for declarative multi-component deployments using YAML manifest files ([#508](https://github.com/microsoft/wassette/pull/508))
+- MCP prompts for building Wassette components, providing guided workflows for component development ([#501](https://github.com/microsoft/wassette/pull/501))
+- Query parameter with relevance-based ranking to `search-components` built-in tool for improved component discovery ([#526](https://github.com/microsoft/wassette/pull/526))
+- Progress indicators for OCI component downloads showing download status and progress ([#515](https://github.com/microsoft/wassette/pull/515))
+- Comprehensive invocation logging for tool and component calls, providing detailed audit trails ([#503](https://github.com/microsoft/wassette/pull/503))
+- Endpoint logs after server initialization showing the URLs where the server is listening ([#514](https://github.com/microsoft/wassette/pull/514))
+- GitHub API component example in JavaScript (`examples/github-js`) demonstrating GitHub API integration as a WebAssembly component ([#529](https://github.com/microsoft/wassette/pull/529))
+- Production-ready filesystem operations to `filesystem-rs` example with comprehensive file management capabilities ([#555](https://github.com/microsoft/wassette/pull/555))
+- Examples to permission grant subcommand help messages for better CLI discoverability ([#560](https://github.com/microsoft/wassette/pull/560))
+- Description field to `--help` output for improved command documentation ([#556](https://github.com/microsoft/wassette/pull/556))
+- WIT dependencies to enable doc injection for context7-rs example ([#509](https://github.com/microsoft/wassette/pull/509))
+- Dry run support for release process allowing test releases without affecting production ([#493](https://github.com/microsoft/wassette/pull/493))
+- Automated release tag creation on PR merge via `auto-tag-release.yml` workflow ([#492](https://github.com/microsoft/wassette/pull/492))
+- Agentic workflow for automatic changelog fragment generation using towncrier ([#485](https://github.com/microsoft/wassette/pull/485))
+- `/plan` workflow for breaking down complex issues into sub-tasks ([#527](https://github.com/microsoft/wassette/pull/527))
+- Release-doctor agentic workflow for automated release pipeline monitoring ([#500](https://github.com/microsoft/wassette/pull/500))
+- Kind cluster to copilot setup workflow for Kubernetes testing ([#554](https://github.com/microsoft/wassette/pull/554))
+
+### Changed
+
+- **BREAKING CHANGE**: Unified terminology throughout codebase, replacing "plugin" with "component" for consistency ([#502](https://github.com/microsoft/wassette/pull/502))
+- **BREAKING CHANGE**: `wassette inspect` command now accepts component ID instead of file path or URI; components must be loaded first before inspection ([#498](https://github.com/microsoft/wassette/pull/498))
+- Updated rmcp dependency from 0.5.0 to 0.9.1 with improved MCP protocol support ([#591](https://github.com/microsoft/wassette/pull/591))
+- Updated wasmtime and wasi crates to 38.0.4 ([#570](https://github.com/microsoft/wassette/pull/570))
+- Refactored main.rs into focused modules for better code organization and maintainability ([#523](https://github.com/microsoft/wassette/pull/523))
+- Enhanced permission error handling for network requests with improved user feedback and clearer guidance ([#516](https://github.com/microsoft/wassette/pull/516))
+- Updated serve command help text to "Start a MCP Server" for clarity ([#557](https://github.com/microsoft/wassette/pull/557))
+- Merged getting started documentation with quick start guide for streamlined onboarding ([#552](https://github.com/microsoft/wassette/pull/552))
+
+### Fixed
+
+- Fixed broken documentation links and configured link checker for protocol redirects ([#520](https://github.com/microsoft/wassette/pull/520))
+- Fixed release workflow usage example to use `--streamable-http` flag ([#497](https://github.com/microsoft/wassette/pull/497))
+- Fixed update-package-manifests workflow PR creation permission error ([#499](https://github.com/microsoft/wassette/pull/499))
+
 ## [v0.3.4] - 2025-11-02
 
 ### Added
@@ -207,7 +249,7 @@ Initial release of Wassette - A security-oriented runtime that runs WebAssembly 
 - Installation support and documentation
 
 [Unreleased]: https://github.com/microsoft/wassette/compare/v0.3.4...HEAD
-[v0.3.4]: https://github.com/microsoft/wassette/compare/v0.3.4...v0.3.4
+[v0.3.4]: https://github.com/microsoft/wassette/compare/v0.3.0...v0.3.4
 [v0.3.0]: https://github.com/microsoft/wassette/compare/v0.2.0...v0.3.0
 [v0.2.0]: https://github.com/microsoft/wassette/compare/v0.1.0...v0.2.0
 [v0.1.0]: https://github.com/microsoft/wassette/releases/tag/v0.1.0
