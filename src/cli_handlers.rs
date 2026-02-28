@@ -93,6 +93,7 @@ pub async fn create_lifecycle_manager(component_dir: Option<PathBuf>) -> Result<
             }),
             environment_vars: std::collections::HashMap::new(),
             bind_address: "127.0.0.1:9001".to_string(),
+            registry_credentials: std::collections::HashMap::new(),
         }
     } else {
         config::Config::from_serve(&crate::commands::Serve {
@@ -113,11 +114,13 @@ pub async fn create_lifecycle_manager(component_dir: Option<PathBuf>) -> Result<
         secrets_dir,
         environment_vars,
         bind_address: _,
+        registry_credentials,
     } = config;
 
     LifecycleManager::builder(component_dir)
         .with_environment_vars(environment_vars)
         .with_secrets_dir(secrets_dir)
+        .with_registry_credentials(registry_credentials)
         .with_oci_client(oci_client::Client::default())
         .with_http_client(reqwest::Client::default())
         .with_eager_loading(false)

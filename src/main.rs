@@ -107,11 +107,13 @@ async fn main() -> Result<()> {
                     secrets_dir,
                     environment_vars,
                     bind_address: _,
+                    registry_credentials,
                 } = config;
 
                 let lifecycle_manager = LifecycleManager::builder(component_dir)
                     .with_environment_vars(environment_vars)
                     .with_secrets_dir(secrets_dir)
+                    .with_registry_credentials(registry_credentials)
                     .with_oci_client(oci_client::Client::default())
                     .with_http_client(reqwest::Client::default())
                     .with_eager_loading(false)
@@ -197,6 +199,7 @@ async fn main() -> Result<()> {
                     secrets_dir,
                     environment_vars,
                     bind_address,
+                    registry_credentials,
                 } = config;
 
                 // Keep a clone of component_dir for provisioning
@@ -205,6 +208,7 @@ async fn main() -> Result<()> {
                 let lifecycle_manager = LifecycleManager::builder(component_dir)
                     .with_environment_vars(environment_vars)
                     .with_secrets_dir(secrets_dir)
+                    .with_registry_credentials(registry_credentials)
                     .with_oci_client(oci_client::Client::default())
                     .with_http_client(reqwest::Client::default())
                     .with_eager_loading(false)

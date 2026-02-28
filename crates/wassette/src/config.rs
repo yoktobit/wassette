@@ -9,10 +9,37 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
 
 use crate::{
     get_default_secrets_dir, LifecycleManager, DEFAULT_HTTP_TIMEOUT_SECS, DEFAULT_OCI_TIMEOUT_SECS,
 };
+
+/// Credentials for authenticating with a container registry.
+///
+/// Populate the `registry_credentials` map in the wassette config to enable pulling
+/// from private registries.  The key is the registry hostname (e.g. `"ghcr.io"`).
+///
+/// ```toml
+/// [registry_credentials]
+/// "ghcr.io" = { username = "myuser", password = "mytoken" }
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RegistryCredential {
+    /// Registry username or service-account name.
+    pub username: String,
+    /// Registry password, personal-access token, or service-account secret.
+    pub password: String,
+}
+
+impl From<&RegistryCredential> for oci_client::secrets::RegistryAuth {
+    fn from(cred: &RegistryCredential) -> Self {
+        oci_client::secrets::RegistryAuth::Basic(
+            cred.username.clone(),
+            cred.password.clone(),
+        )
+    }
+}
 
 /// Fully-specified configuration for constructing a [`LifecycleManager`].
 #[derive(Clone)]
@@ -22,6 +49,7 @@ pub struct LifecycleConfig {
     environment_vars: HashMap<String, String>,
     http_client: reqwest::Client,
     oci_client: oci_client::Client,
+    registry_credentials: HashMap<String, RegistryCredential>,
     eager_load: bool,
 }
 
@@ -56,6 +84,11 @@ impl LifecycleConfig {
         self.eager_load
     }
 
+    /// Registry credentials keyed by hostname.
+    pub fn registry_credentials(&self) -> &HashMap<String, RegistryCredential> {
+        &self.registry_credentials
+    }
+
     pub(crate) fn into_parts(
         self,
     ) -> (
@@ -64,6 +97,7 @@ impl LifecycleConfig {
         HashMap<String, String>,
         reqwest::Client,
         oci_client::Client,
+        HashMap<String, RegistryCredential>,
         bool,
     ) {
         (
@@ -72,6 +106,7 @@ impl LifecycleConfig {
             self.environment_vars,
             self.http_client,
             self.oci_client,
+            self.registry_credentials,
             self.eager_load,
         )
     }
@@ -85,6 +120,7 @@ pub struct LifecycleBuilder {
     environment_vars: HashMap<String, String>,
     http_client: Option<reqwest::Client>,
     oci_client: Option<oci_client::Client>,
+    registry_credentials: HashMap<String, RegistryCredential>,
     eager_load: bool,
 }
 
@@ -98,6 +134,7 @@ impl LifecycleBuilder {
             environment_vars: HashMap::new(),
             http_client: None,
             oci_client: None,
+            registry_credentials: HashMap::new(),
             eager_load: true,
         }
     }
@@ -136,6 +173,25 @@ impl LifecycleBuilder {
         self
     }
 
+    /// Set the full map of registry credentials (keyed by registry hostname).
+    pub fn with_registry_credentials(
+        mut self,
+        credentials: HashMap<String, RegistryCredential>,
+    ) -> Self {
+        self.registry_credentials = credentials;
+        self
+    }
+
+    /// Add a single registry credential entry.
+    pub fn with_registry_credential(
+        mut self,
+        registry: impl Into<String>,
+        credential: RegistryCredential,
+    ) -> Self {
+        self.registry_credentials.insert(registry.into(), credential);
+        self
+    }
+
     /// Control whether the manager eagerly loads components during build.
     pub fn with_eager_loading(mut self, eager: bool) -> Self {
         self.eager_load = eager;
@@ -167,6 +223,7 @@ impl LifecycleBuilder {
             environment_vars: self.environment_vars,
             http_client,
             oci_client,
+            registry_credentials: self.registry_credentials,
             eager_load: self.eager_load,
         })
     }

@@ -171,6 +171,7 @@ impl PolicyManager {
             policy_uri,
             &self.oci_client,
             &self.http_client,
+            &oci_client::secrets::RegistryAuth::Anonymous,
         )
         .await?;
 

@@ -30,6 +30,7 @@ wasmtime = { workspace = true }
 wasmtime-wasi = { workspace = true }
 wasmtime-wasi-http = { workspace = true }
 wasmtime-wasi-config = { workspace = true }
+base64 = "0.21"
 
 [dev-dependencies]
 proptest = "1.10"

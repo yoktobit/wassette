@@ -4,6 +4,7 @@
 //! A security-oriented runtime that runs WebAssembly Components via MCP
 
 #![warn(missing_docs)]
+#![warn(missing_docs)]
 
 use std::collections::HashMap;
 use std::io::IsTerminal;
@@ -20,6 +21,7 @@ use component2json::{
 use etcetera::BaseStrategy;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use base64::Engine;
 use tokio::fs::DirEntry;
 use tokio::sync::{RwLock, Semaphore};
 use tracing::{debug, info, instrument, warn};
@@ -38,7 +40,7 @@ mod secrets;
 mod wasistate;
 
 use component_storage::ComponentStorage;
-pub use config::{LifecycleBuilder, LifecycleConfig};
+pub use config::{LifecycleBuilder, LifecycleConfig, RegistryCredential};
 pub use http::WassetteWasiState;
 use loader::{ComponentResource, DownloadedResource};
 use policy_internal::PolicyManager;
@@ -59,7 +61,6 @@ const METADATA_EXT: &str = "metadata.json";
 pub(crate) const DEFAULT_OCI_TIMEOUT_SECS: u64 = 30;
 pub(crate) const DEFAULT_HTTP_TIMEOUT_SECS: u64 = 30;
 pub(crate) const DEFAULT_DOWNLOAD_CONCURRENCY: usize = 8;
-
 /// Get the default secrets directory path based on the OS
 pub(crate) fn get_default_secrets_dir() -> PathBuf {
     let dir_strategy = etcetera::choose_base_strategy();
@@ -304,6 +305,7 @@ pub struct LifecycleManager {
     oci_client: Arc<oci_wasm::WasmClient>,
     http_client: reqwest::Client,
     secrets_manager: Arc<SecretsManager>,
+    registry_credentials: HashMap<String, oci_client::secrets::RegistryAuth>,
 }
 
 /// A representation of a loaded component instance. It contains both the base component info and a
@@ -340,7 +342,7 @@ impl LifecycleManager {
     /// Construct a lifecycle manager from an explicit configuration without loading components.
     #[instrument(skip_all, fields(component_dir = %config.component_dir().display()))]
     pub async fn from_config(config: LifecycleConfig) -> Result<Self> {
-        let (component_dir, secrets_dir, environment_vars, http_client, oci_client, _) =
+        let (component_dir, secrets_dir, environment_vars, http_client, oci_client, raw_credentials, _) =
             config.into_parts();
 
         let storage =
@@ -353,6 +355,12 @@ impl LifecycleManager {
 
         let environment_vars = Arc::new(environment_vars);
         let oci_client = Arc::new(oci_wasm::WasmClient::new(oci_client));
+
+        let registry_credentials: HashMap<String, oci_client::secrets::RegistryAuth> =
+            raw_credentials
+                .iter()
+                .map(|(k, v)| (k.clone(), oci_client::secrets::RegistryAuth::from(v)))
+                .collect();
 
         let policy_manager = PolicyManager::new(
             storage.clone(),
@@ -370,6 +378,7 @@ impl LifecycleManager {
             oci_client,
             http_client,
             secrets_manager,
+            registry_credentials,
         })
     }
 
@@ -427,15 +436,180 @@ impl LifecycleManager {
         // Show progress when running in CLI mode (stderr is a TTY)
         let show_progress = std::io::stderr().is_terminal();
 
+        let auth = self.auth_for_uri(uri);
         let resource = loader::load_resource_with_progress::<ComponentResource>(
             uri,
             &self.oci_client,
             &self.http_client,
             show_progress,
+            &auth,
         )
         .await?;
         let id = resource.id()?;
         Ok((id, resource))
+    }
+
+    /// Resolve the [`oci_client::secrets::RegistryAuth`] to use for the given URI.
+    ///
+    /// Parses the registry hostname from `oci://` URIs and looks it up in the
+    /// configured credentials map, falling back to anonymous access.
+    fn auth_for_uri(&self, uri: &str) -> oci_client::secrets::RegistryAuth {
+        if let Some(reference_str) = uri.trim().strip_prefix("oci://") {
+            if let Ok(reference) = reference_str.parse::<oci_client::Reference>() {
+                if let Some(auth) = self.registry_credentials.get(reference.registry()) {
+                    return auth.clone();
+                }
+
+                // Try to reuse existing Docker/OCI login stored in the user's docker config
+                if let Some(auth) = Self::try_read_docker_config_auth(reference.registry()) {
+                    return auth;
+                }
+            }
+        }
+
+        oci_client::secrets::RegistryAuth::Anonymous
+    }
+
+    /// Attempt to read `~/.docker/config.json` (or `DOCKER_CONFIG`) and extract
+    /// a basic auth entry for the provided registry hostname. Returns `None` if
+    /// no usable credentials are found.
+    fn try_read_docker_config_auth(registry: &str) -> Option<oci_client::secrets::RegistryAuth> {
+        use std::fs;
+        use std::path::PathBuf;
+
+        // Determine docker config path (Docker, Podman compatibility)
+        let config_path = if let Ok(p) = std::env::var("DOCKER_CONFIG") {
+            let mut pb = PathBuf::from(p);
+            pb.push("config.json");
+            pb
+        } else if let Ok(home) = std::env::var("HOME") {
+            let mut pb = PathBuf::from(home);
+            pb.push(".docker/config.json");
+            pb
+        } else if let Ok(userprofile) = std::env::var("USERPROFILE") {
+            let mut pb = PathBuf::from(userprofile);
+            pb.push(r".docker\\config.json");
+            pb
+        } else {
+            return None;
+        };
+
+        let content = fs::read_to_string(&config_path).ok()?;
+        let json: serde_json::Value = serde_json::from_str(&content).ok()?;
+
+        // Prefer credential helpers / credsStore over raw `auth` entries.
+        // 1) Per-registry helper: `credHelpers` map
+        if let Some(helpers) = json.get("credHelpers").and_then(|v| v.as_object()) {
+            if let Some(helper_name) = helpers.get(registry).and_then(|v| v.as_str()) {
+                if let Some(a) = Self::run_credential_helper(helper_name, registry) {
+                    return Some(a);
+                }
+            }
+        }
+
+        // 2) Global credsStore
+        if let Some(store) = json.get("credsStore").and_then(|v| v.as_str()) {
+            if let Some(a) = Self::run_credential_helper(store, registry) {
+                return Some(a);
+            }
+        }
+
+        // 3) If helpers aren't present or didn't yield credentials, *do not* read
+        // raw `auth` entries unless explicitly allowed by environment. This avoids
+        // silently reading plaintext credentials managed by other tools.
+        let allow_insecure = std::env::var("WASSETTE_ALLOW_INSECURE_DOCKER_AUTH")
+            .map(|s| s == "1" || s.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
+
+        if !allow_insecure {
+            return None;
+        }
+
+        // Last-resort: parse `auths` map and decode base64 `auth` fields.
+        let auths = json.get("auths")?;
+        if let serde_json::Value::Object(map) = auths {
+            // Exact key
+            if let Some(entry) = map.get(registry) {
+                if let Some(auth_str) = entry.get("auth").and_then(|v| v.as_str()) {
+                    if let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(auth_str) {
+                        if let Ok(s) = String::from_utf8(decoded) {
+                            if let Some((user, pass)) = s.split_once(':') {
+                                return Some(oci_client::secrets::RegistryAuth::Basic(
+                                    user.to_string(),
+                                    pass.to_string(),
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Try suffix match for keys like "https://index.docker.io/v1/"
+            for (k, v) in map.iter() {
+                if k.ends_with(registry) {
+                    if let Some(auth_str) = v.get("auth").and_then(|vv| vv.as_str()) {
+                        if let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(auth_str) {
+                            if let Ok(s) = String::from_utf8(decoded) {
+                                if let Some((user, pass)) = s.split_once(':') {
+                                    return Some(oci_client::secrets::RegistryAuth::Basic(
+                                        user.to_string(),
+                                        pass.to_string(),
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        None
+    }
+
+    /// Run the docker credential helper (docker-credential-<name>) with the `get`
+    /// operation, passing the registry on stdin. Returns `Some(RegistryAuth)` on
+    /// success.
+    fn run_credential_helper(helper_name: &str, registry: &str) -> Option<oci_client::secrets::RegistryAuth> {
+        use std::io::{Read, Write};
+        use std::process::{Command, Stdio};
+
+        // Helper binary is usually named `docker-credential-<helper_name>`
+        let binary = format!("docker-credential-{}", helper_name);
+        // Try spawning the helper; on Windows the helper may be suffixed with
+        // `.cmd` or `.exe`. Try variants if the plain name fails.
+        let try_spawn = |name: &str| {
+            Command::new(name)
+                .arg("get")
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .spawn()
+                .ok()
+        };
+
+        let mut child = try_spawn(&binary)
+            .or_else(|| try_spawn(&format!("{}.cmd", binary)))
+            .or_else(|| try_spawn(&format!("{}.exe", binary)))?;
+
+        if let Some(mut stdin) = child.stdin.take() {
+            let _ = stdin.write_all(registry.as_bytes());
+            let _ = stdin.write_all(b"\n");
+        }
+
+        let out_buf = child.wait_with_output().ok()?;
+        if !out_buf.status.success() {
+            return None;
+        }
+
+        let out = String::from_utf8_lossy(&out_buf.stdout).to_string();
+
+        let v: serde_json::Value = serde_json::from_str(&out).ok()?;
+        let username = v.get("Username").or_else(|| v.get("username"))?.as_str()?;
+        let secret = v.get("Secret").or_else(|| v.get("secret")).or_else(|| v.get("Password")).or_else(|| v.get("password"))?.as_str()?;
+
+        Some(oci_client::secrets::RegistryAuth::Basic(
+            username.to_string(),
+            secret.to_string(),
+        ))
     }
 
     async fn stage_component_artifact(
@@ -1265,6 +1439,98 @@ impl LifecycleManager {
     }
 
     // Granular permission system methods
+}
+
+#[cfg(test)]
+mod docker_cred_tests {
+    use super::*;
+    use std::fs::{self, File};
+    use std::io::Write;
+    use std::path::PathBuf;
+
+    fn write_config(dir: &PathBuf, content: &str) {
+        let mut cfg = dir.clone();
+        cfg.push("config.json");
+        let mut f = File::create(&cfg).expect("create config");
+        f.write_all(content.as_bytes()).expect("write config");
+    }
+
+    #[test]
+    fn cred_helper_is_used_when_present() {
+        let tmp = std::env::temp_dir().join(format!("wassette-test-cred-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis()));
+        let _ = fs::create_dir_all(&tmp);
+
+        // config points to a helper named `myhelper`
+        let config = r#"{ "credsStore": "myhelper" }"#;
+        write_config(&tmp, config);
+
+        // create a fake docker-credential-myhelper.cmd that prints JSON
+        let helper_path = tmp.join("docker-credential-myhelper.cmd");
+        let mut hf = File::create(&helper_path).expect("create helper");
+        // Windows-friendly command script: prints JSON to stdout
+        hf.write_all(b"@echo off\r\necho {\"Username\":\"u_test\",\"Secret\":\"s_test\"}\r\n").expect("write helper");
+
+        // Ensure helper is found by PATH and DOCKER_CONFIG points to tmp
+        let old_path = std::env::var_os("PATH");
+        let mut path_val = tmp.clone().into_os_string();
+        if let Some(p) = old_path.clone() {
+            path_val.push(";");
+            path_val.push(p);
+        }
+        std::env::set_var("PATH", &path_val);
+        std::env::set_var("DOCKER_CONFIG", &tmp);
+
+        let auth = LifecycleManager::try_read_docker_config_auth("example.com");
+
+        // cleanup
+        let _ = fs::remove_file(&helper_path);
+        let _ = fs::remove_file(tmp.join("config.json"));
+        let _ = fs::remove_dir(&tmp);
+        if let Some(p) = old_path {
+            std::env::set_var("PATH", p);
+        }
+
+        match auth {
+            Some(oci_client::secrets::RegistryAuth::Basic(u, p)) => {
+                assert_eq!(u, "u_test");
+                assert_eq!(p, "s_test");
+            }
+            other => panic!("expected Basic auth, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn auths_base64_is_used_when_allowed() {
+        let tmp = std::env::temp_dir().join(format!("wassette-test-auths-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis()));
+        let _ = fs::create_dir_all(&tmp);
+
+        let encoded = base64::engine::general_purpose::STANDARD.encode("user_x:pass_x");
+        let config = format!(r#"{{ "auths": {{ "example.com": {{ "auth": "{}" }} }} }}"#, encoded);
+        write_config(&tmp, &config);
+
+        let old = std::env::var_os("WASSETTE_ALLOW_INSECURE_DOCKER_AUTH");
+        std::env::set_var("WASSETTE_ALLOW_INSECURE_DOCKER_AUTH", "1");
+        std::env::set_var("DOCKER_CONFIG", &tmp);
+
+        let auth = LifecycleManager::try_read_docker_config_auth("example.com");
+
+        // cleanup
+        let _ = fs::remove_file(tmp.join("config.json"));
+        let _ = fs::remove_dir(&tmp);
+        if let Some(v) = old {
+            std::env::set_var("WASSETTE_ALLOW_INSECURE_DOCKER_AUTH", v);
+        } else {
+            std::env::remove_var("WASSETTE_ALLOW_INSECURE_DOCKER_AUTH");
+        }
+
+        match auth {
+            Some(oci_client::secrets::RegistryAuth::Basic(u, p)) => {
+                assert_eq!(u, "user_x");
+                assert_eq!(p, "pass_x");
+            }
+            other => panic!("expected Basic auth, got: {:?}", other),
+        }
+    }
 }
 // Load components in parallel for improved startup performance
 async fn load_components_parallel(

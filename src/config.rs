@@ -8,6 +8,7 @@ use anyhow::Context;
 use etcetera::BaseStrategy;
 use figment::providers::{Env, Format, Serialized, Toml};
 use serde::{Deserialize, Serialize};
+pub use wassette::RegistryCredential;
 
 use crate::commands::{Run, Serve};
 
@@ -64,6 +65,18 @@ pub struct Config {
     /// Configured via PORT and BIND_HOST environment variables or CLI/config file
     #[serde(default = "default_bind_address", rename = "bind_address")]
     pub bind_address: String,
+
+    /// Per-registry authentication credentials.
+    ///
+    /// The key is the registry hostname (e.g. `"ghcr.io"`).  Configure this
+    /// in `config.toml` to enable pulling from private OCI registries:
+    ///
+    /// ```toml
+    /// [registry_credentials]
+    /// "ghcr.io" = { username = "myuser", password = "mytoken" }
+    /// ```
+    #[serde(default)]
+    pub registry_credentials: HashMap<String, RegistryCredential>,
 }
 
 impl Config {

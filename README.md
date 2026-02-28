@@ -88,6 +88,42 @@ This project may contain trademarks or logos for projects, products, or services
 [Releases]: https://github.com/microsoft/wassette/releases
 [Discord]: https://discord.gg/microsoft-open-source
 
+## Registry authentication
+
+Wassette will attempt to reuse existing OCI registry login credentials rather
+than requiring you to store passwords in the Wassette configuration. The
+precedence is:
+
+- **Explicit credentials**: any `registry_credentials` provided in the
+  `LifecycleConfig` remain the highest priority.
+- **Credential helpers / `credsStore`**: Wassette consults Docker/Podman
+  configuration (`DOCKER_CONFIG` or `~/.docker/config.json`) and will invoke
+  the configured credential helper (e.g. `docker-credential-<name>`) to
+  retrieve credentials for a given registry. This supports both per-registry
+  `credHelpers` and a global `credsStore` setting.
+- **Raw `auth` entries (opt-in)**: Wassette will only decode and use the
+  base64 `auth` fields found under `auths` in `config.json` when the
+  environment variable `WASSETTE_ALLOW_INSECURE_DOCKER_AUTH` is set to
+  `1` or `true`. This fallback is intentionally gated because many systems
+  use credential helpers or external stores; reading raw `auth` entries can
+  leak secrets or bypass external credential management.
+
+Notes:
+
+- Wassette looks for helper binaries named `docker-credential-<name>` and
+  will attempt common suffixes on Windows (e.g. `.cmd`, `.exe`). Helpers are
+  invoked with the `get` subcommand and the registry hostname on stdin and
+  must return JSON with `Username`/`username` and `Secret`/`secret` (or
+  `Password`/`password`).
+- If you rely on external credential stores (e.g. Docker credential
+  helpers or Podman's auth), prefer configuring them rather than enabling
+  `WASSETTE_ALLOW_INSECURE_DOCKER_AUTH`.
+- Example (enable unsafe fallback):
+
+```powershell
+setx WASSETTE_ALLOW_INSECURE_DOCKER_AUTH 1
+```
+
 ## Contributors
 
 Thanks to all contributors who are helping shape Wassette into something great.
