@@ -470,96 +470,201 @@ impl LifecycleManager {
         oci_client::secrets::RegistryAuth::Anonymous
     }
 
-    /// Attempt to read `~/.docker/config.json` (or `DOCKER_CONFIG`) and extract
-    /// a basic auth entry for the provided registry hostname. Returns `None` if
-    /// no usable credentials are found.
+    /// Attempt to read Docker/Podman auth config and extract a basic auth entry
+    /// for the provided registry hostname. Returns `None` if no usable
+    /// credentials are found.
     fn try_read_docker_config_auth(registry: &str) -> Option<oci_client::secrets::RegistryAuth> {
         use std::fs;
         use std::path::PathBuf;
 
-        // Determine docker config path (Docker, Podman compatibility)
-        let config_path = if let Ok(p) = std::env::var("DOCKER_CONFIG") {
-            let mut pb = PathBuf::from(p);
-            pb.push("config.json");
-            pb
-        } else if let Ok(home) = std::env::var("HOME") {
-            let mut pb = PathBuf::from(home);
-            pb.push(".docker/config.json");
-            pb
-        } else if let Ok(userprofile) = std::env::var("USERPROFILE") {
-            let mut pb = PathBuf::from(userprofile);
-            pb.push(r".docker\\config.json");
-            pb
-        } else {
-            return None;
-        };
+        #[derive(Clone)]
+        struct AuthConfigSource {
+            path: PathBuf,
+            allow_raw_auth_by_default: bool,
+        }
 
-        let content = fs::read_to_string(&config_path).ok()?;
-        let json: serde_json::Value = serde_json::from_str(&content).ok()?;
+        fn normalize_registry_key(value: &str) -> String {
+            let mut s = value.trim().to_ascii_lowercase();
+            if let Some(stripped) = s.strip_prefix("https://") {
+                s = stripped.to_string();
+            } else if let Some(stripped) = s.strip_prefix("http://") {
+                s = stripped.to_string();
+            }
+            if let Some(stripped) = s.strip_prefix("//") {
+                s = stripped.to_string();
+            }
+            s = s.trim_end_matches('/').to_string();
+            s.split('/').next().unwrap_or_default().to_string()
+        }
 
-        // Prefer credential helpers / credsStore over raw `auth` entries.
-        // 1) Per-registry helper: `credHelpers` map
-        if let Some(helpers) = json.get("credHelpers").and_then(|v| v.as_object()) {
-            if let Some(helper_name) = helpers.get(registry).and_then(|v| v.as_str()) {
-                if let Some(a) = Self::run_credential_helper(helper_name, registry) {
+        fn decode_basic_auth(entry: &serde_json::Value) -> Option<oci_client::secrets::RegistryAuth> {
+            let auth_str = entry.get("auth").and_then(|v| v.as_str())?;
+            let decoded = base64::engine::general_purpose::STANDARD
+                .decode(auth_str)
+                .ok()?;
+            let s = String::from_utf8(decoded).ok()?;
+            let (user, pass) = s.split_once(':')?;
+            Some(oci_client::secrets::RegistryAuth::Basic(
+                user.to_string(),
+                pass.to_string(),
+            ))
+        }
+
+        fn gather_auth_config_sources() -> Vec<AuthConfigSource> {
+            let mut sources = Vec::new();
+
+            if let Ok(path) = std::env::var("REGISTRY_AUTH_FILE") {
+                sources.push(AuthConfigSource {
+                    path: PathBuf::from(path),
+                    allow_raw_auth_by_default: true,
+                });
+            }
+
+            if let Ok(xdg_runtime) = std::env::var("XDG_RUNTIME_DIR") {
+                let mut pb = PathBuf::from(xdg_runtime);
+                pb.push("containers/auth.json");
+                sources.push(AuthConfigSource {
+                    path: pb,
+                    allow_raw_auth_by_default: true,
+                });
+            }
+
+            if let Ok(xdg_config_home) = std::env::var("XDG_CONFIG_HOME") {
+                let mut pb = PathBuf::from(xdg_config_home);
+                pb.push("containers/auth.json");
+                sources.push(AuthConfigSource {
+                    path: pb,
+                    allow_raw_auth_by_default: true,
+                });
+            }
+
+            if let Ok(home) = std::env::var("HOME") {
+                let mut pb = PathBuf::from(&home);
+                pb.push(".config/containers/auth.json");
+                sources.push(AuthConfigSource {
+                    path: pb,
+                    allow_raw_auth_by_default: true,
+                });
+
+                let mut docker_pb = PathBuf::from(home);
+                docker_pb.push(".docker/config.json");
+                sources.push(AuthConfigSource {
+                    path: docker_pb,
+                    allow_raw_auth_by_default: false,
+                });
+            }
+
+            if let Ok(userprofile) = std::env::var("USERPROFILE") {
+                let mut pb = PathBuf::from(&userprofile);
+                pb.push(r".config\containers\auth.json");
+                sources.push(AuthConfigSource {
+                    path: pb,
+                    allow_raw_auth_by_default: true,
+                });
+
+                let mut docker_pb = PathBuf::from(userprofile);
+                docker_pb.push(r".docker\config.json");
+                sources.push(AuthConfigSource {
+                    path: docker_pb,
+                    allow_raw_auth_by_default: false,
+                });
+            }
+
+            if let Ok(appdata) = std::env::var("APPDATA") {
+                let mut pb = PathBuf::from(appdata);
+                pb.push(r"containers\auth.json");
+                sources.push(AuthConfigSource {
+                    path: pb,
+                    allow_raw_auth_by_default: true,
+                });
+            }
+
+            if let Ok(p) = std::env::var("DOCKER_CONFIG") {
+                let mut pb = PathBuf::from(p);
+                pb.push("config.json");
+                sources.push(AuthConfigSource {
+                    path: pb,
+                    allow_raw_auth_by_default: false,
+                });
+            }
+
+            sources
+        }
+
+        fn try_extract_auth_from_json(
+            json: &serde_json::Value,
+            registry: &str,
+            allow_raw_auth: bool,
+        ) -> Option<oci_client::secrets::RegistryAuth> {
+            let normalized_registry = normalize_registry_key(registry);
+
+            if let Some(helpers) = json.get("credHelpers").and_then(|v| v.as_object()) {
+                if let Some(helper_name) = helpers.get(registry).and_then(|v| v.as_str()) {
+                    if let Some(a) = LifecycleManager::run_credential_helper(helper_name, registry) {
+                        return Some(a);
+                    }
+                }
+
+                for (key, helper_value) in helpers {
+                    if normalize_registry_key(key) == normalized_registry {
+                        if let Some(helper_name) = helper_value.as_str() {
+                            if let Some(a) = LifecycleManager::run_credential_helper(helper_name, registry) {
+                                return Some(a);
+                            }
+                        }
+                    }
+                }
+            }
+
+            if let Some(store) = json.get("credsStore").and_then(|v| v.as_str()) {
+                if let Some(a) = LifecycleManager::run_credential_helper(store, registry) {
                     return Some(a);
                 }
             }
-        }
 
-        // 2) Global credsStore
-        if let Some(store) = json.get("credsStore").and_then(|v| v.as_str()) {
-            if let Some(a) = Self::run_credential_helper(store, registry) {
-                return Some(a);
+            if !allow_raw_auth {
+                return None;
             }
+
+            let auths = json.get("auths")?;
+            if let serde_json::Value::Object(map) = auths {
+                if let Some(entry) = map.get(registry) {
+                    if let Some(auth) = decode_basic_auth(entry) {
+                        return Some(auth);
+                    }
+                }
+
+                for (key, value) in map {
+                    if normalize_registry_key(key) == normalized_registry
+                        || key.ends_with(registry)
+                    {
+                        if let Some(auth) = decode_basic_auth(value) {
+                            return Some(auth);
+                        }
+                    }
+                }
+            }
+
+            None
         }
 
-        // 3) If helpers aren't present or didn't yield credentials, *do not* read
-        // raw `auth` entries unless explicitly allowed by environment. This avoids
-        // silently reading plaintext credentials managed by other tools.
         let allow_insecure = std::env::var("WASSETTE_ALLOW_INSECURE_DOCKER_AUTH")
             .map(|s| s == "1" || s.eq_ignore_ascii_case("true"))
             .unwrap_or(false);
 
-        if !allow_insecure {
-            return None;
-        }
+        for source in gather_auth_config_sources() {
+            let content = match fs::read_to_string(&source.path) {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+            let json: serde_json::Value = match serde_json::from_str(&content) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
 
-        // Last-resort: parse `auths` map and decode base64 `auth` fields.
-        let auths = json.get("auths")?;
-        if let serde_json::Value::Object(map) = auths {
-            // Exact key
-            if let Some(entry) = map.get(registry) {
-                if let Some(auth_str) = entry.get("auth").and_then(|v| v.as_str()) {
-                    if let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(auth_str) {
-                        if let Ok(s) = String::from_utf8(decoded) {
-                            if let Some((user, pass)) = s.split_once(':') {
-                                return Some(oci_client::secrets::RegistryAuth::Basic(
-                                    user.to_string(),
-                                    pass.to_string(),
-                                ));
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Try suffix match for keys like "https://index.docker.io/v1/"
-            for (k, v) in map.iter() {
-                if k.ends_with(registry) {
-                    if let Some(auth_str) = v.get("auth").and_then(|vv| vv.as_str()) {
-                        if let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(auth_str) {
-                            if let Ok(s) = String::from_utf8(decoded) {
-                                if let Some((user, pass)) = s.split_once(':') {
-                                    return Some(oci_client::secrets::RegistryAuth::Basic(
-                                        user.to_string(),
-                                        pass.to_string(),
-                                    ));
-                                }
-                            }
-                        }
-                    }
-                }
+            let allow_raw_auth = source.allow_raw_auth_by_default || allow_insecure;
+            if let Some(auth) = try_extract_auth_from_json(&json, registry, allow_raw_auth) {
+                return Some(auth);
             }
         }
 
@@ -570,7 +675,7 @@ impl LifecycleManager {
     /// operation, passing the registry on stdin. Returns `Some(RegistryAuth)` on
     /// success.
     fn run_credential_helper(helper_name: &str, registry: &str) -> Option<oci_client::secrets::RegistryAuth> {
-        use std::io::{Read, Write};
+        use std::io::Write;
         use std::process::{Command, Stdio};
 
         // Helper binary is usually named `docker-credential-<helper_name>`
@@ -1447,6 +1552,12 @@ mod docker_cred_tests {
     use std::fs::{self, File};
     use std::io::Write;
     use std::path::PathBuf;
+    use std::sync::{Mutex, OnceLock};
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
 
     fn write_config(dir: &PathBuf, content: &str) {
         let mut cfg = dir.clone();
@@ -1457,6 +1568,7 @@ mod docker_cred_tests {
 
     #[test]
     fn cred_helper_is_used_when_present() {
+        let _guard = env_lock().lock().expect("env lock");
         let tmp = std::env::temp_dir().join(format!("wassette-test-cred-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis()));
         let _ = fs::create_dir_all(&tmp);
 
@@ -1501,6 +1613,7 @@ mod docker_cred_tests {
 
     #[test]
     fn auths_base64_is_used_when_allowed() {
+        let _guard = env_lock().lock().expect("env lock");
         let tmp = std::env::temp_dir().join(format!("wassette-test-auths-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis()));
         let _ = fs::create_dir_all(&tmp);
 
@@ -1527,6 +1640,57 @@ mod docker_cred_tests {
             Some(oci_client::secrets::RegistryAuth::Basic(u, p)) => {
                 assert_eq!(u, "user_x");
                 assert_eq!(p, "pass_x");
+            }
+            other => panic!("expected Basic auth, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn podman_registry_auth_file_is_used_without_insecure_flag() {
+        let _guard = env_lock().lock().expect("env lock");
+        let tmp = std::env::temp_dir().join(format!(
+            "wassette-test-podman-auth-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis()
+        ));
+        let _ = fs::create_dir_all(&tmp);
+
+        let auth_file = tmp.join("auth.json");
+        let encoded = base64::engine::general_purpose::STANDARD.encode("azure_user:azure_pass");
+        let config = format!(
+            r#"{{ "auths": {{ "https://example.azurecr.io/": {{ "auth": "{}" }} }} }}"#,
+            encoded
+        );
+        let mut f = File::create(&auth_file).expect("create auth file");
+        f.write_all(config.as_bytes()).expect("write auth file");
+
+        let old_registry_auth_file = std::env::var_os("REGISTRY_AUTH_FILE");
+        let old_allow_insecure = std::env::var_os("WASSETTE_ALLOW_INSECURE_DOCKER_AUTH");
+        std::env::set_var("REGISTRY_AUTH_FILE", &auth_file);
+        std::env::remove_var("WASSETTE_ALLOW_INSECURE_DOCKER_AUTH");
+
+        let auth = LifecycleManager::try_read_docker_config_auth("example.azurecr.io");
+
+        let _ = fs::remove_file(&auth_file);
+        let _ = fs::remove_dir(&tmp);
+        if let Some(v) = old_registry_auth_file {
+            std::env::set_var("REGISTRY_AUTH_FILE", v);
+        } else {
+            std::env::remove_var("REGISTRY_AUTH_FILE");
+        }
+        if let Some(v) = old_allow_insecure {
+            std::env::set_var("WASSETTE_ALLOW_INSECURE_DOCKER_AUTH", v);
+        } else {
+            std::env::remove_var("WASSETTE_ALLOW_INSECURE_DOCKER_AUTH");
+        }
+
+        match auth {
+            Some(oci_client::secrets::RegistryAuth::Basic(u, p)) => {
+                assert_eq!(u, "azure_user");
+                assert_eq!(p, "azure_pass");
             }
             other => panic!("expected Basic auth, got: {:?}", other),
         }

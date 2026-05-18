@@ -115,6 +115,11 @@ Notes:
   invoked with the `get` subcommand and the registry hostname on stdin and
   must return JSON with `Username`/`username` and `Secret`/`secret` (or
   `Password`/`password`).
+- For Podman logins, Wassette also checks `REGISTRY_AUTH_FILE` and common
+  Podman auth locations (for example `containers/auth.json` under runtime/config
+  directories) and can use those credentials directly.
+- Registry keys are normalized during lookup, so entries like
+  `https://myregistry.azurecr.io/` match pulls from `myregistry.azurecr.io`.
 - If you rely on external credential stores (e.g. Docker credential
   helpers or Podman's auth), prefer configuring them rather than enabling
   `WASSETTE_ALLOW_INSECURE_DOCKER_AUTH`.
@@ -123,6 +128,29 @@ Notes:
 ```powershell
 setx WASSETTE_ALLOW_INSECURE_DOCKER_AUTH 1
 ```
+
+### Troubleshooting Podman auth (Azure registries)
+
+If `oci://<name>.azurecr.io/...` pulls fail after `podman login`, verify which
+auth file Podman is using and that it has an entry for your registry.
+
+```powershell
+# 1) Check where Podman writes auth
+$Env:REGISTRY_AUTH_FILE
+
+# 2) Login explicitly (writes/updates auth)
+podman login myregistry.azurecr.io
+
+# 3) Confirm auth entry exists (key may include https:// and trailing /)
+Get-Content $Env:REGISTRY_AUTH_FILE
+
+# 4) Then run Wassette load
+# (example) oci://myregistry.azurecr.io/team/tool:latest
+```
+
+Tip: If `REGISTRY_AUTH_FILE` is not set, Podman may use a default
+`containers/auth.json` path; set `REGISTRY_AUTH_FILE` explicitly to remove
+ambiguity.
 
 ## Contributors
 
